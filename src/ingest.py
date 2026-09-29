@@ -49,8 +49,10 @@ def split_documents(docs: list[Document]) -> list[Document]:
     return chunks
 
 
-def build_index(data_dir: Path = config.DATA_DIR, persist_dir: Path = config.CHROMA_DIR) -> int:
+def build_index(data_dir: Path | None = None, persist_dir: Path | None = None) -> int:
     """Rebuild the vector store from scratch. Returns the number of chunks stored."""
+    data_dir = data_dir or config.DATA_DIR
+    persist_dir = persist_dir or config.CHROMA_DIR  # read at call time, so tests can redirect it
     docs = load_documents(data_dir)
     if not docs:
         raise FileNotFoundError(f"No .md files found in {data_dir}")

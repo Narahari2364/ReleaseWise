@@ -28,3 +28,21 @@ def test_chunks_carry_their_document_title():
 )
 def test_top_result_comes_from_the_right_document(question, expected_source):
     assert retrieve(question)[0].source == expected_source
+
+
+def test_retrieve_recovers_when_index_is_rebuilt_underneath_it(monkeypatch):
+    """Simulates another process re-running `ingest` while the app holds an old handle."""
+    import src.retriever as r
+
+    calls = {"n": 0}
+    real = r._vector_ranking
+
+    def stale_once(question):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Error getting collection: Collection [abc] does not exist.")
+        return real(question)
+
+    monkeypatch.setattr(r, "_vector_ranking", stale_once)
+    assert retrieve("How do I roll back a bad release?")[0].source == "runbooks/rollback-procedure.md"
+    assert calls["n"] == 2

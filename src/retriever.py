@@ -10,7 +10,6 @@ that ranks well in either list rises to the top.
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 
 from langchain_chroma import Chroma
 from rank_bm25 import BM25Okapi
@@ -36,7 +35,8 @@ def tokenize(text: str) -> list[str]:
 
 
 @lru_cache(maxsize=1)
-def get_vectorstore(persist_dir: Path = config.CHROMA_DIR) -> Chroma:
+def get_vectorstore() -> Chroma:
+    persist_dir = config.CHROMA_DIR  # read at call time, so tests can point it at a temp dir
     if not persist_dir.exists():
         raise FileNotFoundError("Vector store not found. Run `python -m src.app ingest` first.")
     return Chroma(
@@ -71,6 +71,19 @@ MODES = ("hybrid", "vector", "keyword")
 
 def retrieve(question: str, k: int = config.TOP_K, mode: str = "hybrid") -> list[RetrievedChunk]:
     """mode="vector"/"keyword" exist for ablations: `python -m src.evals retrieval --mode vector`."""
+    try:
+        return _retrieve(question, k, mode)
+    except FileNotFoundError:
+        raise
+    except Exception:  # noqa: BLE001
+        # The index was rebuilt by another process (e.g. `ingest`) while we held a handle to
+        # the old one ("Collection ... does not exist"). Reopen it and retry once.
+        get_vectorstore.cache_clear()
+        get_keyword_index.cache_clear()
+        return _retrieve(question, k, mode)
+
+
+def _retrieve(question: str, k: int, mode: str) -> list[RetrievedChunk]:
     rankings = []
     if mode in ("hybrid", "vector"):
         rankings.append(_vector_ranking(question))
