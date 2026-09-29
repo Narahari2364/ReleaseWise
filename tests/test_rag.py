@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from src.llm import AnthropicBackend
 from src.rag import format_context, generate
 from src.retriever import RetrievedChunk
 
@@ -24,11 +25,11 @@ def test_context_tags_each_chunk_with_its_source():
 
 def test_generate_sends_retrieved_context_and_returns_text():
     client = FakeClient()
-    answer = generate("How long is the canary?", CHUNKS, client=client)
+    answer = generate("How long is the canary?", CHUNKS, backend=AnthropicBackend(client=client))
     assert "30 minutes" in answer
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Canary is 5% for 30 minutes." in prompt and "How long is the canary?" in prompt
 
 
 def test_generate_handles_refusal():
-    assert "declined" in generate("q", CHUNKS, client=FakeClient(stop_reason="refusal"))
+    assert "declined" in generate("q", CHUNKS, backend=AnthropicBackend(client=FakeClient(stop_reason="refusal")))

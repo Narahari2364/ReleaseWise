@@ -25,5 +25,8 @@ EMBEDDING_CACHE_DIR = Path(os.getenv("RELEASEWISE_MODEL_CACHE", ROOT / ".cache" 
 # How many chunks to hand the LLM per question
 TOP_K = 4
 
-# LLM used to write the final answer
+# LLM provider: "ollama" (free, local — default) or "anthropic" (Claude API, needs a key)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 CLAUDE_MODEL = os.getenv("RELEASEWISE_MODEL", "claude-opus-5")

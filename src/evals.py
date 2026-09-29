@@ -4,7 +4,7 @@ Two evals, because they answer different questions and cost different amounts:
 
   retrieval  (free, runs in CI)   Did search put the right document AND the answer text
                                   in front of the model? If not, no LLM can answer well.
-  agent      (paid, needs a key)  End to end through run_agent(): right answer, cited the
+  agent      (free via Ollama)    End to end through run_agent(): right answer, cited the
                                   source, used the expected tool, admitted "not found"
                                   on questions the docs can't answer.
 
@@ -34,11 +34,15 @@ RUNS_DIR = config.ROOT / "evals" / "runs"
 CASE_TIMEOUT_S = 180  # hard wall-clock ceiling per agent case
 CONCURRENCY = 4
 
+# Abstaining on an unanswerable question: any of these counts as "I don't know"
 NOT_FOUND = re.compile(
     r"couldn't find|could not find|not in the knowledge base|no information|"
     r"(?:doesn't|does not|don't|do not) (?:specify|state|mention|include|contain|cover|say|list)|"
     r"not (?:specified|stated|mentioned|documented|listed|covered)"
 )
+# Hedging on an answerable question: only an explicit "couldn't find" fails a correct answer.
+# (A side remark like "the doc doesn't specify a different timeline for Sev-2" is fine.)
+GAVE_UP = re.compile(r"couldn't find|could not find|not in the knowledge base")
 
 
 # ---------- grading (pure functions, unit-tested in tests/test_evals.py) ----------
@@ -63,12 +67,26 @@ def is_answerable(case: dict) -> bool:
     return bool(case["must_include"])
 
 
+def doc_title(source: str) -> str:
+    """The document's '# Heading', e.g. runbooks/oncall-faq.md -> 'On-Call FAQ'."""
+    text = (config.DATA_DIR / source).read_text(encoding="utf-8")
+    return next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), source)
+
+
+def cites_source(case: dict, answer: str) -> bool:
+    """Citing by file name OR by document title both let an engineer find the doc."""
+    norm = normalize(answer)
+    for source in case["expected_sources"]:
+        if source.rsplit("/", 1)[-1] in answer or normalize(doc_title(source)) in norm:
+            return True
+    return False
+
+
 def grade_answer(case: dict, answer: str, tools_used: list[str]) -> dict:
     """Three independent binary metrics, so a failure says *what* went wrong."""
     if is_answerable(case):
-        correct = has_all_facts(case, answer) and not NOT_FOUND.search(normalize(answer))
-        stems = [s.rsplit("/", 1)[-1] for s in case["expected_sources"]]
-        cited = any(stem in answer for stem in stems)
+        correct = has_all_facts(case, answer) and not GAVE_UP.search(normalize(answer))
+        cited = cites_source(case, answer)
     else:
         correct = bool(NOT_FOUND.search(normalize(answer)))
         cited = correct  # nothing to cite; abstaining is the right behaviour
@@ -167,11 +185,11 @@ def run_retrieval_eval(variant: str, mode: str = "hybrid") -> float:
     return sum(r["grade"]["answer_in_context"] for r in rows) / len(rows)
 
 
-def _run_agent_case(case: dict) -> dict:
+def _run_agent_case(case: dict, backend) -> dict:
     from src.agent import run_agent
 
     start = time.perf_counter()
-    result = run_agent(case["question"])
+    result = run_agent(case["question"], backend=backend)
     latency = round(time.perf_counter() - start, 2)
     status = {"end_turn": "ok", "max_tokens": "truncated", "refusal": "refusal"}.get(result.stop_reason, "ok")
     return {
@@ -192,11 +210,16 @@ def _run_agent_case(case: dict) -> dict:
     }
 
 
-def run_agent_eval(variant: str, reps: int, limit: int | None) -> None:
-    from src.rag import has_credentials
+def run_agent_eval(variant: str, reps: int, limit: int | None, provider: str) -> None:
+    from src.llm import get_backend
 
-    if not has_credentials():
-        sys.exit("The agent eval calls Claude: set ANTHROPIC_API_KEY in .env first.")
+    backend = get_backend(provider)
+    if not backend.available():
+        hint = {"ollama": f"start Ollama and run `ollama pull {backend.model}`",
+                "anthropic": "set ANTHROPIC_API_KEY in .env"}[provider]
+        sys.exit(f"No {provider} model available: {hint}.")
+    # A local model serves one request at a time; parallel calls would only queue and time out
+    workers = 1 if provider == "ollama" else CONCURRENCY
 
     cases = load_cases()[:limit] if limit else load_cases()
     flow = RUNS_DIR / "agent"
@@ -224,10 +247,10 @@ def run_agent_eval(variant: str, reps: int, limit: int | None) -> None:
         done = {(r["prompt_id"], r["rep"]) for r in map(json.loads, results_path.read_text().splitlines())}
     todo = [(c, rep) for rep in range(reps) for c in cases if (c["id"], rep) not in done]
     print(f"Agent eval: {len(todo)} runs ({len(cases)} cases x {reps} reps, {len(done)} already done) "
-          f"on {config.CLAUDE_MODEL} -> {out.relative_to(config.ROOT)}")
+          f"on {provider}:{backend.model} -> {out.relative_to(config.ROOT)}")
 
-    pool = ThreadPoolExecutor(max_workers=CONCURRENCY)
-    futures = [(case, rep, pool.submit(_run_agent_case, case)) for case, rep in todo]
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = [(case, rep, pool.submit(_run_agent_case, case, backend)) for case, rep in todo]
     for case, rep, future in futures:
         try:
             outcome = future.result(timeout=CASE_TIMEOUT_S)
@@ -241,7 +264,7 @@ def run_agent_eval(variant: str, reps: int, limit: int | None) -> None:
             continue
 
         row, result = outcome["row"], outcome["result"]
-        if row["model"] and not row["model"].startswith(config.CLAUDE_MODEL):
+        if row["model"] and not row["model"].startswith(backend.model):
             _append(errors_path, {"prompt_id": case["id"], "rep": rep, "failure_class": "served_model_mismatch",
                                   "model": row["model"], "usage": row["usage"]})
             print(f"  MODEL MISMATCH {case['id']}: served by {row['model']}")
@@ -265,6 +288,21 @@ def run_agent_eval(variant: str, reps: int, limit: int | None) -> None:
     print(f"  tokens used: {usage['input_tokens']:,} in / {usage['output_tokens']:,} out")
 
 
+def rescore_agent_eval(variant: str) -> None:
+    """Re-grade stored answers after a grader/case fix — no model calls, so it's instant and free."""
+    path = RUNS_DIR / "agent" / variant / "results.jsonl"
+    cases = {c["id"]: c for c in load_cases()}
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for r in rows:
+        if r["status"] == "ok":
+            old, r["grade"] = r["grade"], grade_answer(cases[r["prompt_id"]], r["meta"]["answer"], r["meta"]["tools"])
+            if old != r["grade"]:
+                print(f"  {r['prompt_id']}: {old} -> {r['grade']}")
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    print(f"Re-scored {len(rows)} rows in {path.relative_to(config.ROOT)}:")
+    _summarize(rows, ["correct", "cited", "tool_ok"])
+
+
 def _append(path: Path, row: dict) -> None:
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
@@ -277,10 +315,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--variant", default="baseline")
     r.add_argument("--mode", choices=("hybrid", "vector", "keyword"), default="hybrid", help="retriever ablation")
     r.add_argument("--min-hit-rate", type=float, default=0.0, help="exit 1 if answer_in_context rate is below this")
-    a = sub.add_parser("agent", help="paid end-to-end agent eval")
+    a = sub.add_parser("agent", help="end-to-end agent eval (free with Ollama, paid with Claude)")
     a.add_argument("--variant", default="baseline")
+    a.add_argument("--provider", choices=("ollama", "anthropic"), default=config.LLM_PROVIDER)
     a.add_argument("--reps", type=int, default=1)
     a.add_argument("--limit", type=int, help="only the first N cases (for a pilot run)")
+    s = sub.add_parser("rescore", help="re-grade a stored agent run after changing the grader")
+    s.add_argument("--variant", default="baseline")
     args = parser.parse_args(argv)
 
     if args.eval == "retrieval":
@@ -288,8 +329,10 @@ def main(argv: list[str] | None = None) -> int:
         if rate < args.min_hit_rate:
             print(f"FAILED: answer_in_context {rate:.0%} < required {args.min_hit_rate:.0%}")
             return 1
+    elif args.eval == "rescore":
+        rescore_agent_eval(args.variant)
     else:
-        run_agent_eval(args.variant, args.reps, args.limit)
+        run_agent_eval(args.variant, args.reps, args.limit, args.provider)
     return 0
 
 

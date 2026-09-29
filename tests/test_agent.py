@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.agent import MAX_STEPS, route_offline, run_agent
+from src.llm import AnthropicBackend
 
 
 def text(t):
@@ -37,7 +38,7 @@ def test_agent_runs_requested_tool_and_feeds_result_back():
         reply("tool_use", tool_use("run_checklist", {"checklist_name": "hotfix-checklist"})),
         reply("end_turn", text("2 of 7 hotfix steps are done. [checklists/hotfix-checklist.md]")),
     )
-    result = run_agent("Where are we on the hotfix checklist?", client=client)
+    result = run_agent("Where are we on the hotfix checklist?", backend=AnthropicBackend(client=client))
 
     assert [c.name for c in result.tool_calls] == ["run_checklist"]
     assert result.text.startswith("2 of 7")
@@ -56,7 +57,7 @@ def test_parallel_tool_calls_return_in_one_message():
         ),
         reply("end_turn", text("done")),
     )
-    run_agent("q", client=client)
+    run_agent("q", backend=AnthropicBackend(client=client))
     results = client.requests[1]["messages"][-1]["content"]
     assert [r["tool_use_id"] for r in results] == ["a", "b"]
 
@@ -66,14 +67,14 @@ def test_tool_errors_are_sent_back_to_the_model():
         reply("tool_use", tool_use("run_checklist", {"checklist_name": "missing"})),
         reply("end_turn", text("That checklist doesn't exist.")),
     )
-    result = run_agent("q", client=client)
+    result = run_agent("q", backend=AnthropicBackend(client=client))
     assert result.tool_calls[0].is_error
     assert client.requests[1]["messages"][-1]["content"][0]["is_error"] is True
 
 
 def test_loop_stops_at_max_steps():
     client = ScriptedClient(*[reply("tool_use", tool_use("search_docs", {"query": "x"})) for _ in range(MAX_STEPS)])
-    result = run_agent("q", client=client)
+    result = run_agent("q", backend=AnthropicBackend(client=client))
     assert len(result.tool_calls) == MAX_STEPS and "Stopped" in result.text
 
 
@@ -88,3 +89,53 @@ def test_loop_stops_at_max_steps():
 )
 def test_offline_router(question, expected_tool):
     assert route_offline(question).name == expected_tool
+
+
+# ---------- Ollama backend: same loop, different wire format ----------
+
+class FakeOllama:
+    """Mimics ollama.Client.chat: tool calls come back as message.tool_calls[].function."""
+
+    def __init__(self, *messages):
+        self.messages, self.requests = list(messages), []
+
+    def chat(self, **kwargs):
+        self.requests.append(kwargs)
+        return SimpleNamespace(message=self.messages.pop(0), model="qwen2.5:7b", done_reason="stop",
+                               prompt_eval_count=100, eval_count=20)
+
+    def list(self):
+        return SimpleNamespace(models=[SimpleNamespace(model="qwen2.5:7b")])
+
+
+def ollama_msg(content="", calls=()):
+    tool_calls = [SimpleNamespace(function=SimpleNamespace(name=n, arguments=a)) for n, a in calls]
+    return SimpleNamespace(content=content, tool_calls=tool_calls or None)
+
+
+def test_agent_loop_works_with_ollama_backend():
+    from src.llm import OllamaBackend
+
+    client = FakeOllama(
+        ollama_msg(calls=[("run_checklist", {"checklist_name": "post-deploy-verification"})]),
+        ollama_msg("3 of 7 steps done [checklists/post-deploy-verification.md]"),
+    )
+    result = run_agent("Where are we on post-deploy verification?", backend=OllamaBackend(client=client))
+
+    assert [c.name for c in result.tool_calls] == ["run_checklist"]
+    assert result.model == "qwen2.5:7b" and result.usage == {"input_tokens": 200, "output_tokens": 40}
+    sent = client.requests[1]["messages"]
+    assert sent[0]["role"] == "system"
+    assert sent[-1] == {"role": "tool", "tool_name": "run_checklist", "content": sent[-1]["content"]}
+    assert "3/7 steps done" in sent[-1]["content"]
+    # Tools are translated into OpenAI-style function schemas
+    assert client.requests[0]["tools"][0]["type"] == "function"
+
+
+def test_unavailable_backend_falls_back_to_offline_router():
+    class Down:
+        def available(self):
+            return False
+
+    result = run_agent("Run the pre-release checklist", backend=Down())
+    assert not result.llm_used and result.tool_calls[0].name == "run_checklist"

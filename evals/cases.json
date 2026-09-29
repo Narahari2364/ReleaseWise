@@ -61,7 +61,7 @@
 
   {"id": "run-pre-release", "tags": ["checklist"], "question": "Run the pre-release checklist.",
    "expected_tool": "run_checklist", "expected_sources": ["checklists/pre-release-checklist.md"],
-   "must_include": ["4/10|4 of 10|4 out of 10|four of ten|4 of the 10", "database migration"]},
+   "must_include": ["4/10|4 of 10|4 out of 10|four of ten|4 of the 10|steps 1, 2, 3, and 4|steps 1, 2, 3 and 4|steps 1-4|40%", "database migration"]},
 
   {"id": "hotfix-pending", "tags": ["checklist"], "question": "What's still pending on the hotfix checklist?",
    "expected_tool": "run_checklist", "expected_sources": ["checklists/hotfix-checklist.md"],

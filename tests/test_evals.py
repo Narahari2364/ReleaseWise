@@ -65,3 +65,18 @@ def test_wrong_tool_is_recorded_separately_from_correctness():
 def test_wilson_interval_is_sane():
     lo, hi = wilson_interval(18, 20)
     assert 0.6 < lo < 0.9 < hi <= 1.0
+
+
+def test_citation_by_title_or_filename_counts():
+    case = BY_ID["alert-silence"]
+    assert grade_answer(case, "Up to 24 hours [runbooks/oncall-faq.md]", ["search_docs"])["cited"] == 1
+    assert grade_answer(case, "Up to 24 hours, per the [On-Call FAQ].", ["search_docs"])["cited"] == 1
+    assert grade_answer(case, "Up to 24 hours.", ["search_docs"])["cited"] == 0
+
+
+def test_side_remark_does_not_fail_a_correct_answer_but_giving_up_does():
+    case = BY_ID["postmortem-deadline"]
+    ok = "Within 5 business days; the doc does not specify a different timeline for Sev-2."
+    hedge = "Within 5 business days, but I couldn't find the exact Sev-2 rule."
+    assert grade_answer(case, ok, ["search_docs"])["correct"] == 1
+    assert grade_answer(case, hedge, ["search_docs"])["correct"] == 0

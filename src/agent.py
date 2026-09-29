@@ -1,24 +1,22 @@
-"""The agent: Claude decides which tool to call, we run it, repeat until Claude has an answer.
+"""The agent: the LLM decides which tool to call, we run it, repeat until it has an answer.
 
     user question
         │
         ▼
-    Claude (sees tool descriptions) ──► tool_use: run_checklist("hotfix-checklist")
-        ▲                                      │
-        │                                      ▼
-        └────────── tool_result ◄──── our Python runs the function
+    LLM (sees tool descriptions) ──► tool call: run_checklist("hotfix-checklist")
+        ▲                                    │
+        │                                    ▼
+        └────────── tool result ◄──── our Python runs the function
 
-The loop ends when Claude replies without asking for a tool (stop_reason == "end_turn").
+The loop ends when the model replies without asking for a tool. The loop is provider-agnostic:
+the same code drives a local Ollama model or Claude (see src/llm.py).
 """
 
 import json
 import re
 from dataclasses import dataclass, field
 
-import anthropic
-
-from src import config
-from src.rag import has_credentials
+from src.llm import LLMTurn, ToolResult, get_backend
 from src.tools import available_checklists, execute_tool, tool_definitions
 
 MAX_STEPS = 6  # safety cap so a confused model can't loop forever
@@ -44,9 +42,6 @@ class ToolCall:
     is_error: bool = False
 
 
-USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-
-
 @dataclass
 class AgentResult:
     text: str
@@ -54,68 +49,56 @@ class AgentResult:
     llm_used: bool = True
     # Observability — what the eval runner records per case
     stop_reason: str | None = None  # of the final model call
-    model: str | None = None  # as reported by the API response, not our config
+    model: str | None = None  # as reported by the provider's response, not our config
     usage: dict = field(default_factory=dict)  # summed over every model call in the loop
     transcript: list[dict] = field(default_factory=list)  # user / tool_call / tool_result / assistant turns
 
 
-def _add_usage(total: dict, response) -> None:
-    usage = getattr(response, "usage", None)
-    for key in USAGE_FIELDS:
-        total[key] = total.get(key, 0) + (getattr(usage, key, 0) or 0)
+def _add_usage(total: dict, turn: LLMTurn) -> None:
+    for key, value in turn.usage.items():
+        total[key] = total.get(key, 0) + value
 
 
-def run_agent(question: str, client: anthropic.Anthropic | None = None) -> AgentResult:
-    if client is None and not has_credentials():
+def run_agent(question: str, backend=None) -> AgentResult:
+    backend = backend or get_backend()
+    if not backend.available():
         return run_offline(question)
 
-    client = client or anthropic.Anthropic()
-    messages: list = [{"role": "user", "content": question}]
+    history: list[dict] = [{"role": "user", "content": question}]
     result = AgentResult(text="", transcript=[{"role": "user", "content": question}])
 
     for _ in range(MAX_STEPS):
-        response = client.beta.messages.create(
-            model=config.CLAUDE_MODEL,
-            max_tokens=16000,
-            system=SYSTEM_PROMPT,
-            tools=tool_definitions(),
-            messages=messages,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-        )
-        _add_usage(result.usage, response)
-        result.model = getattr(response, "model", None)
-        result.stop_reason = response.stop_reason
+        turn = backend.chat(SYSTEM_PROMPT, history, tools=tool_definitions())
+        _add_usage(result.usage, turn)
+        result.model, result.stop_reason = turn.model, turn.stop_reason
 
-        if response.stop_reason == "refusal":
+        if turn.stop_reason == "refusal":
             result.text = "The model declined to answer this question."
             return result
-        if response.stop_reason != "tool_use":
-            result.text = "".join(b.text for b in response.content if b.type == "text").strip()
-            result.transcript.append({"role": "assistant", "content": result.text})
+        if turn.stop_reason != "tool_use":
+            result.text = turn.text
+            result.transcript.append({"role": "assistant", "content": turn.text})
             return result
 
-        # Claude asked for one or more tools: run them all, send every result back in one message
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            output, is_error = execute_tool(block.name, block.input)
-            result.tool_calls.append(ToolCall(block.name, block.input, is_error))
-            result.transcript.append({"role": "tool_call", "name": block.name, "content": json.dumps(block.input, indent=2)})
-            result.transcript.append({"role": "tool_result", "name": block.name, "content": output})
-            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": output, "is_error": is_error})
-        messages.append({"role": "user", "content": tool_results})
+        # The model asked for one or more tools: run them all, send every result back together
+        history.append({"role": "assistant", "turn": turn})
+        results = []
+        for use in turn.tool_uses:
+            output, is_error = execute_tool(use.name, use.input)
+            result.tool_calls.append(ToolCall(use.name, use.input, is_error))
+            result.transcript.append({"role": "tool_call", "name": use.name, "content": json.dumps(use.input, indent=2)})
+            result.transcript.append({"role": "tool_result", "name": use.name, "content": output})
+            results.append(ToolResult(use.id, use.name, output, is_error))
+        history.append({"role": "tool", "results": results})
 
     result.text = f"Stopped after {MAX_STEPS} tool steps without a final answer."
     return result
 
 
-# ---------- offline mode (no API key) ----------
+# ---------- offline mode (no LLM available) ----------
 
 def route_offline(question: str) -> ToolCall:
-    """A crude keyword router standing in for Claude's judgement, so the tools are usable without a key.
+    """A crude keyword router standing in for the LLM's judgement, so the tools work without a model.
 
     Comparing this to the real agent is a good interview point: rules like these break on
     phrasing they didn't anticipate, while the LLM routes from the tool *descriptions*.
@@ -132,5 +115,5 @@ def route_offline(question: str) -> ToolCall:
 def run_offline(question: str) -> AgentResult:
     call = route_offline(question)
     output, call.is_error = execute_tool(call.name, call.input)
-    note = "[offline mode: keyword routing, no LLM — set ANTHROPIC_API_KEY in .env for the real agent]"
+    note = "[offline mode: keyword routing, no LLM — start Ollama (`ollama serve`) or set LLM_PROVIDER/API key]"
     return AgentResult(f"{note}\n\n{output}", [call], llm_used=False)
