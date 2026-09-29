@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ src/
 COPY data/ data/
+COPY streamlit_app.py .
 
 # Bake the embedding model and the vector index into the image,
 # so the container starts instantly and retrieval works with no network access
@@ -20,6 +21,9 @@ RUN python -m src.app ingest
 RUN useradd --create-home app && chown -R app /app
 USER app
 
-# ANTHROPIC_API_KEY is passed at runtime (--env-file .env), never baked into the image
+# Web UI port (see README for the streamlit run command)
+EXPOSE 8501
+
+# Secrets like ANTHROPIC_API_KEY are passed at runtime (--env-file .env), never baked into the image
 ENTRYPOINT ["python", "-m", "src.app"]
 CMD ["chat"]

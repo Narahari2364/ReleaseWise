@@ -11,7 +11,7 @@ by changing one setting.
 
 **Stack:** Python · LangChain (text splitting, Chroma integration) · Chroma vector store ·
 local embeddings (fastembed, bge-small) · BM25 · Ollama (Qwen 2.5 7B) / Claude API · tool calling ·
-pytest · Docker · GitHub Actions
+Streamlit · pytest · Docker · GitHub Actions
 
 ## Architecture
 
@@ -43,6 +43,7 @@ pytest · Docker · GitHub Actions
 | `src/tools.py` | the agent's tools and the JSON schemas the model reads to choose between them |
 | `src/agent.py` | the agent loop (think → call tool → observe → answer), hand-written |
 | `src/evals.py` | retrieval eval (runs in CI) and end-to-end agent eval |
+| `streamlit_app.py` | web UI over the same `run_agent()`, showing tool calls and sources |
 
 ## Run it
 
@@ -56,6 +57,16 @@ cp .env.example .env
 .venv/bin/pytest -q
 ```
 
+**Web UI:**
+
+```bash
+.venv/bin/streamlit run streamlit_app.py      # opens http://localhost:8501
+```
+
+A chat page where each answer shows which tool the agent called (click to see exactly what the
+tool returned) and which documents it came from, plus a sidebar with live checklist progress,
+model status and example questions.
+
 To use Claude instead, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` in `.env`.
 If no LLM is reachable, everything still runs: `ask` shows the retrieved passages and the agent
 falls back to a keyword router.
@@ -65,6 +76,8 @@ falls back to a keyword router.
 ```bash
 docker build -t releasewise .
 docker run --rm -it -e OLLAMA_HOST=http://host.docker.internal:11434 releasewise chat
+docker run --rm -p 8501:8501 -e OLLAMA_HOST=http://host.docker.internal:11434 \
+  --entrypoint streamlit releasewise run streamlit_app.py --server.address 0.0.0.0   # web UI
 ```
 
 ## Evaluation
@@ -145,4 +158,5 @@ separately instead of scoring them as wrong answers.
 - Grow the eval set to 50+ cases with a held-out split, so prompt tuning can't overfit
 - Compare Qwen 2.5 7B against Claude on the same eval (one flag: `--provider anthropic`)
 - Re-ranking with a cross-encoder after hybrid retrieval
-- Streamlit UI; rebuild the agent loop as a LangGraph graph; expose tools over MCP
+- Multi-turn memory in the chat UI (each question is answered independently today)
+- Rebuild the agent loop as a LangGraph graph; expose tools over MCP
