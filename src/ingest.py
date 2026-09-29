@@ -12,6 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src import config
 from src.embeddings import get_embeddings
+from src.retriever import get_keyword_index, get_vectorstore
 
 
 def load_documents(data_dir: Path = config.DATA_DIR) -> list[Document]:
@@ -64,4 +65,7 @@ def build_index(data_dir: Path = config.DATA_DIR, persist_dir: Path = config.CHR
         persist_directory=str(persist_dir),
         collection_metadata={"hnsw:space": "cosine"},
     )
+    # Drop cached handles to the old index so the next retrieve() sees the new one
+    get_vectorstore.cache_clear()
+    get_keyword_index.cache_clear()
     return len(chunks)

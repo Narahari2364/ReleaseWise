@@ -1,12 +1,7 @@
 import pytest
 
-from src.ingest import build_index, load_documents, split_documents
+from src.ingest import load_documents, split_documents
 from src.retriever import retrieve
-
-
-@pytest.fixture(scope="session", autouse=True)
-def index():
-    build_index()
 
 
 def test_loads_all_docs_with_metadata():
