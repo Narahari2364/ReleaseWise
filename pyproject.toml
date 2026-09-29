@@ -1,0 +1,10 @@
+[project]
+name = "releasewise"
+version = "0.1.0"
+description = "RAG-powered release & operations assistant"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

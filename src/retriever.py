@@ -66,10 +66,20 @@ def _keyword_ranking(question: str) -> list[tuple[str, dict]]:
     return [(texts[i], metas[i]) for i in top if scores[i] > 0]
 
 
-def retrieve(question: str, k: int = config.TOP_K) -> list[RetrievedChunk]:
+MODES = ("hybrid", "vector", "keyword")
+
+
+def retrieve(question: str, k: int = config.TOP_K, mode: str = "hybrid") -> list[RetrievedChunk]:
+    """mode="vector"/"keyword" exist for ablations: `python -m src.evals retrieval --mode vector`."""
+    rankings = []
+    if mode in ("hybrid", "vector"):
+        rankings.append(_vector_ranking(question))
+    if mode in ("hybrid", "keyword"):
+        rankings.append(_keyword_ranking(question))
+
     fused: dict[int, float] = {}
     by_id: dict[int, tuple[str, dict]] = {}
-    for ranking in (_vector_ranking(question), _keyword_ranking(question)):
+    for ranking in rankings:
         for rank, (text, meta) in enumerate(ranking):
             chunk_id = meta["chunk_id"]
             fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (RRF_K + rank + 1)

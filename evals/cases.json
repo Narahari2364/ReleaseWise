@@ -1,0 +1,82 @@
+[
+  {"id": "canary-traffic", "tags": ["fact"], "question": "How much production traffic does the canary get, and for how long?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/deployment-process.md"],
+   "must_include": ["5%", "30 minutes|30 min|30-minute"]},
+
+  {"id": "friday-freeze", "tags": ["fact"], "question": "Can I deploy on a Friday afternoon?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/deployment-process.md"],
+   "must_include": ["12:00|noon|12 pm|12pm"]},
+
+  {"id": "rollback-trigger", "tags": ["fact"], "question": "At what error rate should I roll back a release, and for how long does it have to last?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/rollback-procedure.md"],
+   "must_include": ["1%", "5 minutes|5 min|five minutes"]},
+
+  {"id": "rollback-target-time", "tags": ["fact"], "question": "How quickly should a rollback be started after a problem is detected?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/rollback-procedure.md"],
+   "must_include": ["15 minutes|15 min|fifteen minutes"]},
+
+  {"id": "oncall-escalation", "tags": ["fact"], "question": "If the primary on-call doesn't acknowledge a page, how long until it escalates, and to whom?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/oncall-faq.md"],
+   "must_include": ["10 minutes|10 min|ten minutes", "secondary"]},
+
+  {"id": "alert-silence", "tags": ["fact"], "question": "How long can I silence a noisy alert without needing approval?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/oncall-faq.md"],
+   "must_include": ["24 hours|24h|24 hrs"]},
+
+  {"id": "sev1-status-updates", "tags": ["fact"], "question": "During a Sev-1 incident, how often do we post status page updates?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/incident-response.md"],
+   "must_include": ["30 minutes|30 min|half an hour|half-hour"]},
+
+  {"id": "postmortem-deadline", "tags": ["fact"], "question": "How soon after a Sev-2 incident must the post-mortem be published?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/incident-response.md"],
+   "must_include": ["5 business days|five business days"]},
+
+  {"id": "rc-staging-time", "tags": ["fact"], "question": "How long must a release candidate run in staging before it can go to production?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/release-versioning-policy.md"],
+   "must_include": ["24 hours|24h|24 hrs"]},
+
+  {"id": "payments-cadence", "tags": ["fact"], "question": "How often is payments-api released, and on which day of the week?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/release-versioning-policy.md"],
+   "must_include": ["two weeks|2 weeks|biweekly|bi-weekly|every other week|fortnight", "wednesday"]},
+
+  {"id": "rename-column", "tags": ["fact"], "question": "Is renaming a database column in a migration backward compatible?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/database-migrations.md"],
+   "must_include": ["not compatible|not backward compatible|not backward-compatible|not backwards compatible|isn't backward|isn't compatible|incompatible|is not backward"]},
+
+  {"id": "large-table-migration", "tags": ["procedure"], "question": "What do I need to do to run a migration on a table with 50 million rows?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/database-migrations.md"],
+   "must_include": ["--online|online migration", "peak"]},
+
+  {"id": "rollout-steps", "tags": ["procedure"], "question": "After the canary passes, what are the traffic steps for the full rollout and how long is each hold?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/deployment-process.md"],
+   "must_include": ["25%", "50%", "100%", "10 minutes|10 min|10-minute"]},
+
+  {"id": "payments-migration-rollback", "tags": ["multi-doc"], "question": "A payments-api release that included a database migration is failing. Can I just run orbit-deploy rollback?",
+   "expected_tool": "search_docs", "expected_sources": ["runbooks/rollback-procedure.md", "runbooks/database-migrations.md"],
+   "must_include": ["backward compatible|backward-compatible|backwards compatible|backwards-compatible"]},
+
+  {"id": "hotfix-vs-normal-canary", "tags": ["multi-doc"], "question": "How long is the canary for a hotfix compared to a normal deployment?",
+   "expected_tool": "search_docs", "expected_sources": ["checklists/hotfix-checklist.md", "runbooks/deployment-process.md"],
+   "must_include": ["10 minutes|10 min|10-minute", "30 minutes|30 min|30-minute"]},
+
+  {"id": "run-pre-release", "tags": ["checklist"], "question": "Run the pre-release checklist.",
+   "expected_tool": "run_checklist", "expected_sources": ["checklists/pre-release-checklist.md"],
+   "must_include": ["4/10|4 of 10|4 out of 10|four of ten|4 of the 10", "database migration"]},
+
+  {"id": "hotfix-pending", "tags": ["checklist"], "question": "What's still pending on the hotfix checklist?",
+   "expected_tool": "run_checklist", "expected_sources": ["checklists/hotfix-checklist.md"],
+   "must_include": ["regression test", "back-ported|backported|back-port|backport"]},
+
+  {"id": "post-deploy-status", "tags": ["checklist"], "question": "Where are we on the post-deploy verification checklist?",
+   "expected_tool": "run_checklist", "expected_sources": ["checklists/post-deploy-verification.md"],
+   "must_include": ["3/7|3 of 7|3 out of 7|three of seven|3 of the 7"]},
+
+  {"id": "vpn-setup", "tags": ["unanswerable"], "question": "What is the VPN setup procedure for a new laptop?",
+   "expected_tool": "search_docs", "expected_sources": [], "must_include": []},
+
+  {"id": "stipend-amount", "tags": ["unanswerable"], "question": "Exactly how many dollars is the weekly on-call stipend?",
+   "expected_tool": "search_docs", "expected_sources": [], "must_include": []},
+
+  {"id": "support-sla", "tags": ["unanswerable"], "question": "What is the response-time SLA for customer support tickets?",
+   "expected_tool": "search_docs", "expected_sources": [], "must_include": []}
+]

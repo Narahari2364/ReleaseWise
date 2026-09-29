@@ -1,8 +1,9 @@
 .venv/
-__pycache__/
-*.pyc
+.git/
 .env
 .chroma/
 .cache/
 .pytest_cache/
+__pycache__/
 evals/runs/
+tests/

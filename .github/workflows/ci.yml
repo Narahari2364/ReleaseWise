@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Tests + retrieval eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      # The embedding model is ~70 MB; cache it so CI doesn't download it every run
+      - uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-${{ hashFiles('src/config.py') }}
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Unit tests (no API key needed — the LLM is faked)
+        run: pytest -q
+
+      - name: Retrieval eval (quality gate — fails the build if search regresses)
+        run: |
+          python -m src.app ingest
+          python -m src.evals retrieval --min-hit-rate 0.9
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-eval
+          path: evals/runs/retrieval/
+
+  docker:
+    name: Docker build + smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t releasewise .
+      - name: Smoke test with networking disabled
+        run: docker run --rm --network none releasewise agent "Run the pre-release checklist" | grep "4/10 steps done"

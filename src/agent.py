@@ -11,6 +11,7 @@
 The loop ends when Claude replies without asking for a tool (stop_reason == "end_turn").
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -43,11 +44,25 @@ class ToolCall:
     is_error: bool = False
 
 
+USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
 @dataclass
 class AgentResult:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     llm_used: bool = True
+    # Observability — what the eval runner records per case
+    stop_reason: str | None = None  # of the final model call
+    model: str | None = None  # as reported by the API response, not our config
+    usage: dict = field(default_factory=dict)  # summed over every model call in the loop
+    transcript: list[dict] = field(default_factory=list)  # user / tool_call / tool_result / assistant turns
+
+
+def _add_usage(total: dict, response) -> None:
+    usage = getattr(response, "usage", None)
+    for key in USAGE_FIELDS:
+        total[key] = total.get(key, 0) + (getattr(usage, key, 0) or 0)
 
 
 def run_agent(question: str, client: anthropic.Anthropic | None = None) -> AgentResult:
@@ -56,7 +71,7 @@ def run_agent(question: str, client: anthropic.Anthropic | None = None) -> Agent
 
     client = client or anthropic.Anthropic()
     messages: list = [{"role": "user", "content": question}]
-    calls: list[ToolCall] = []
+    result = AgentResult(text="", transcript=[{"role": "user", "content": question}])
 
     for _ in range(MAX_STEPS):
         response = client.beta.messages.create(
@@ -68,25 +83,33 @@ def run_agent(question: str, client: anthropic.Anthropic | None = None) -> Agent
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
+        _add_usage(result.usage, response)
+        result.model = getattr(response, "model", None)
+        result.stop_reason = response.stop_reason
 
         if response.stop_reason == "refusal":
-            return AgentResult("The model declined to answer this question.", calls)
+            result.text = "The model declined to answer this question."
+            return result
         if response.stop_reason != "tool_use":
-            text = "".join(b.text for b in response.content if b.type == "text").strip()
-            return AgentResult(text, calls)
+            result.text = "".join(b.text for b in response.content if b.type == "text").strip()
+            result.transcript.append({"role": "assistant", "content": result.text})
+            return result
 
         # Claude asked for one or more tools: run them all, send every result back in one message
         messages.append({"role": "assistant", "content": response.content})
-        results = []
+        tool_results = []
         for block in response.content:
             if block.type != "tool_use":
                 continue
             output, is_error = execute_tool(block.name, block.input)
-            calls.append(ToolCall(block.name, block.input, is_error))
-            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output, "is_error": is_error})
-        messages.append({"role": "user", "content": results})
+            result.tool_calls.append(ToolCall(block.name, block.input, is_error))
+            result.transcript.append({"role": "tool_call", "name": block.name, "content": json.dumps(block.input, indent=2)})
+            result.transcript.append({"role": "tool_result", "name": block.name, "content": output})
+            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": output, "is_error": is_error})
+        messages.append({"role": "user", "content": tool_results})
 
-    return AgentResult(f"Stopped after {MAX_STEPS} tool steps without a final answer.", calls)
+    result.text = f"Stopped after {MAX_STEPS} tool steps without a final answer."
+    return result
 
 
 # ---------- offline mode (no API key) ----------
